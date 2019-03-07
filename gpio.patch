@@ -1,0 +1,1472 @@
+diff --git a/device/rockchip/common/device.mk b/device/rockchip/common/device.mk
+index a81871d..e236434 100755
+--- a/device/rockchip/common/device.mk
++++ b/device/rockchip/common/device.mk
+@@ -212,7 +212,8 @@ PRODUCT_PACKAGES += \
+     libvpu \
+     libstagefrighthw \
+     libgralloc_priv_omx \
+-    akmd 
++    akmd \
++	gpio.default
+ 
+ # iep
+ ifneq ($(filter rk3190 rk3026 rk3288 rk312x rk3188, $(strip $(TARGET_BOARD_PLATFORM))), )
+diff --git a/frameworks/base/Android.mk b/frameworks/base/Android.mk
+index 0262d07..50bd740 100755
+--- a/frameworks/base/Android.mk
++++ b/frameworks/base/Android.mk
+@@ -207,6 +207,7 @@ LOCAL_SRC_FILES += \
+ 	core/java/android/os/IUpdateLock.aidl \
+ 	core/java/android/os/IUserManager.aidl \
+ 	core/java/android/os/IVibratorService.aidl \
++	core/java/android/os/IGpioService.aidl \
+ 	core/java/android/service/carrier/ICarrierMessagingCallback.aidl \
+ 	core/java/android/service/carrier/ICarrierMessagingService.aidl \
+ 	core/java/android/service/notification/INotificationListener.aidl \
+diff --git a/frameworks/base/api/current.txt b/frameworks/base/api/current.txt
+index 8c350b6..0ee1322 100644
+--- a/frameworks/base/api/current.txt
++++ b/frameworks/base/api/current.txt
+@@ -7250,6 +7250,7 @@ package android.content {
+     field public static final java.lang.String DISPLAY_SERVICE = "display";
+     field public static final java.lang.String DOWNLOAD_SERVICE = "download";
+     field public static final java.lang.String DROPBOX_SERVICE = "dropbox";
++    field public static final java.lang.String GPIO_SERVICE = "gpio";
+     field public static final java.lang.String INPUT_METHOD_SERVICE = "input_method";
+     field public static final java.lang.String INPUT_SERVICE = "input";
+     field public static final java.lang.String JOB_SCHEDULER_SERVICE = "jobscheduler";
+diff --git a/frameworks/base/api/system-current.txt b/frameworks/base/api/system-current.txt
+index 944ffc1..a1baee8 100644
+--- a/frameworks/base/api/system-current.txt
++++ b/frameworks/base/api/system-current.txt
+@@ -7489,6 +7489,7 @@ package android.content {
+     field public static final java.lang.String DISPLAY_SERVICE = "display";
+     field public static final java.lang.String DOWNLOAD_SERVICE = "download";
+     field public static final java.lang.String DROPBOX_SERVICE = "dropbox";
++    field public static final java.lang.String GPIO_SERVICE = "gpio";
+     field public static final java.lang.String HDMI_CONTROL_SERVICE = "hdmi_control";
+     field public static final java.lang.String INPUT_METHOD_SERVICE = "input_method";
+     field public static final java.lang.String INPUT_SERVICE = "input";
+diff --git a/frameworks/base/core/java/android/app/ContextImpl.java b/frameworks/base/core/java/android/app/ContextImpl.java
+old mode 100644
+new mode 100755
+index 6c9c804..51a7bc0
+--- a/frameworks/base/core/java/android/app/ContextImpl.java
++++ b/frameworks/base/core/java/android/app/ContextImpl.java
+@@ -119,6 +119,7 @@ import android.os.RemoteException;
+ import android.os.ServiceManager;
+ import android.os.UserHandle;
+ import android.os.SystemVibrator;
++import android.os.SystemGpio;
+ import android.os.UserManager;
+ import android.os.storage.IMountService;
+ import android.os.storage.StorageManager;
+@@ -600,6 +601,12 @@ class ContextImpl extends Context {
+                 public Object createService(ContextImpl ctx) {
+                     return new SystemVibrator(ctx);
+                 }});
++                
++        registerService(GPIO_SERVICE, new ServiceFetcher() {
++            @Override
++            public Object createService(ContextImpl ctx) {
++                return new SystemGpio(ctx);
++            }});
+ 
+         registerService(WALLPAPER_SERVICE, WALLPAPER_FETCHER);
+ 
+diff --git a/frameworks/base/core/java/android/content/Context.java b/frameworks/base/core/java/android/content/Context.java
+old mode 100644
+new mode 100755
+index 7028dfe..ae7e8a2
+--- a/frameworks/base/core/java/android/content/Context.java
++++ b/frameworks/base/core/java/android/content/Context.java
+@@ -2423,6 +2423,8 @@ public abstract class Context {
+      * @see android.os.Vibrator
+      */
+     public static final String VIBRATOR_SERVICE = "vibrator";
++    
++    public static final String GPIO_SERVICE = "gpio";
+ 
+     /**
+      * Use with {@link #getSystemService} to retrieve a {@link
+diff --git a/frameworks/base/core/java/android/os/IGpioService.aidl b/frameworks/base/core/java/android/os/IGpioService.aidl
+new file mode 100755
+index 0000000..b5698fb
+--- /dev/null
++++ b/frameworks/base/core/java/android/os/IGpioService.aidl
+@@ -0,0 +1,12 @@
++package android.os;
++ 
++/** {@hide} */
++interface IGpioService
++{
++	int gpioWrite(int gpio, int value);
++	int gpioRead(int gpio);
++	int gpioDirection(int gpio, int direction, int value);
++	int gpioRegKeyEvent(int gpio);
++	int gpioUnregKeyEvent(int gpio);
++	int gpioGetNumber();
++}
+diff --git a/frameworks/base/core/java/android/os/SystemGpio.java b/frameworks/base/core/java/android/os/SystemGpio.java
+new file mode 100755
+index 0000000..da40a85
+--- /dev/null
++++ b/frameworks/base/core/java/android/os/SystemGpio.java
+@@ -0,0 +1,79 @@
++
++package android.os;
++
++import android.content.Context;
++import android.media.AudioAttributes;
++import android.util.Log;
++
++/**
++    Gpio implementation that controls the main system gpio.
++
++    @hide
++*/
++public class SystemGpio
++{
++    private static final String TAG = "gpio";
++
++    private final IGpioService mService;
++    public SystemGpio()
++    {
++        mService = IGpioService.Stub.asInterface(
++                       ServiceManager.getService("gpio"));
++    }
++
++    public SystemGpio(Context context)
++    {
++        mService = IGpioService.Stub.asInterface(
++                       ServiceManager.getService("gpio"));
++    }
++
++    public void gpioWrite(int gpio,int value)
++    {
++        try {
++            mService.gpioWrite(gpio, value);
++        } catch(Exception e) {}
++    }
++    
++    public int gpioRead(int gpio)
++    {
++        try {
++            return mService.gpioRead(gpio);
++        } catch(Exception e) {
++            return -1;
++        }
++    }
++    
++    public void gpioDirection(int gpio,int direction,int value)
++    {
++        try {
++            mService.gpioDirection(gpio, direction, value);
++        } catch(Exception e) {}
++    }
++    
++    public int gpioRegKeyEvent(int gpio)
++    {
++        try {
++            return mService.gpioRegKeyEvent(gpio);
++        } catch(Exception e) {
++            return -1;
++        }
++    }
++    
++    public int gpioUnregKeyEvent(int gpio)
++    {
++        try {
++            return mService.gpioUnregKeyEvent(gpio);
++        } catch(Exception e) {
++            return -1;
++        }
++    }
++    
++    public int gpioGetNumber()
++    {
++        try {
++            return mService.gpioGetNumber();
++        } catch(Exception e) {
++            return -1;
++        }
++    }
++}
+diff --git a/frameworks/base/core/java/android/view/KeyEvent.java b/frameworks/base/core/java/android/view/KeyEvent.java
+index f3b69ae..5026cae 100755
+--- a/frameworks/base/core/java/android/view/KeyEvent.java
++++ b/frameworks/base/core/java/android/view/KeyEvent.java
+@@ -773,7 +773,19 @@ public class KeyEvent extends InputEvent implements Parcelable {
+     public static final int KEYCODE_TV_MEDIA_PAUSE = 274;
+ //$_rbox_$_modify_$ end
+ 
+-    private static final int LAST_KEYCODE = KEYCODE_TV_MEDIA_PAUSE;
++    // GPIO Keys
++    public static final int KEYCODE_GPIO_0 = 275;
++    public static final int KEYCODE_GPIO_1 = 276;
++    public static final int KEYCODE_GPIO_2 = 277;
++    public static final int KEYCODE_GPIO_3 = 278;
++    public static final int KEYCODE_GPIO_4 = 279;
++    public static final int KEYCODE_GPIO_5 = 280;
++    public static final int KEYCODE_GPIO_6 = 281;
++    public static final int KEYCODE_GPIO_7 = 282;
++    public static final int KEYCODE_GPIO_8 = 283;
++    public static final int KEYCODE_GPIO_9 = 284;
++
++    private static final int LAST_KEYCODE = KEYCODE_GPIO_9;
+ 
+     // NOTE: If you add a new keycode here you must also add it to:
+     //  isSystem()
+diff --git a/frameworks/base/core/res/res/values/attrs.xml b/frameworks/base/core/res/res/values/attrs.xml
+old mode 100644
+new mode 100755
+index 75157be..3dc933c
+--- a/frameworks/base/core/res/res/values/attrs.xml
++++ b/frameworks/base/core/res/res/values/attrs.xml
+@@ -1792,6 +1792,17 @@
+         <enum name="KEYCODE_TV_MEDIA_PLAY" value="273" />
+         <enum name="KEYCODE_TV_MEDIA_PAUSE" value="274" />
+ <!--$_rbox_$_modify_$_end-->
++
++		<enum name="KEYCODE_GPIO_0" value="275" />
++		<enum name="KEYCODE_GPIO_1" value="276" />
++		<enum name="KEYCODE_GPIO_2" value="277" />
++		<enum name="KEYCODE_GPIO_3" value="278" />
++		<enum name="KEYCODE_GPIO_4" value="279" />
++		<enum name="KEYCODE_GPIO_5" value="280" />
++		<enum name="KEYCODE_GPIO_6" value="281" />
++		<enum name="KEYCODE_GPIO_7" value="282" />
++		<enum name="KEYCODE_GPIO_8" value="283" />
++		<enum name="KEYCODE_GPIO_9" value="284" />
+     </attr>
+ 
+     <!-- ***************************************************************** -->
+diff --git a/frameworks/base/data/keyboards/Generic.kl b/frameworks/base/data/keyboards/Generic.kl
+old mode 100644
+new mode 100755
+index f10ba96..38e12f0
+--- a/frameworks/base/data/keyboards/Generic.kl
++++ b/frameworks/base/data/keyboards/Generic.kl
+@@ -407,6 +407,18 @@ key 484   B                 FUNCTION
+ key 580   APP_SWITCH
+ key 582   VOICE_ASSIST
+ 
++# GPIO Keys
++key 608   GPIO_0
++key 609   GPIO_1
++key 610   GPIO_2
++key 611   GPIO_3
++key 612   GPIO_4
++key 613   GPIO_5
++key 614   GPIO_6
++key 615   GPIO_7
++key 616   GPIO_8
++key 617   GPIO_9
++
+ # Keys defined by HID usages
+ key usage 0x0c006F BRIGHTNESS_UP
+ key usage 0x0c0070 BRIGHTNESS_DOWN
+diff --git a/frameworks/base/data/keyboards/qwerty.kl b/frameworks/base/data/keyboards/qwerty.kl
+old mode 100644
+new mode 100755
+index 58bf654..24aea03
+--- a/frameworks/base/data/keyboards/qwerty.kl
++++ b/frameworks/base/data/keyboards/qwerty.kl
+@@ -110,3 +110,15 @@ key 215   AT
+ # On an AT keyboard: ESC, F10
+ key 1     BACK
+ key 68    MENU
++
++# GPIO Keys
++key 608   GPIO_0
++key 609   GPIO_1
++key 610   GPIO_2
++key 611   GPIO_3
++key 612   GPIO_4
++key 613   GPIO_5
++key 614   GPIO_6
++key 615   GPIO_7
++key 616   GPIO_8
++key 617   GPIO_9
+diff --git a/frameworks/base/services/core/java/com/android/server/GpioService.java b/frameworks/base/services/core/java/com/android/server/GpioService.java
+new file mode 100755
+index 0000000..692f651
+--- /dev/null
++++ b/frameworks/base/services/core/java/com/android/server/GpioService.java
+@@ -0,0 +1,52 @@
++package com.android.server;
++import android.os.IGpioService;
++
++public class GpioService extends IGpioService.Stub
++{
++    private static final String TAG = "GpioService";
++
++    /* call native c function to access hardware */
++    public int gpioWrite(int gpio, int value) throws android.os.RemoteException
++    {
++        return native_gpioWrite(gpio, value);
++    }
++    
++    public int gpioRead(int gpio) throws android.os.RemoteException
++    {
++        return native_gpioRead(gpio);
++    }
++    
++    public int gpioDirection(int gpio, int direction, int value) throws android.os.RemoteException
++    {
++        return native_gpioDirection(gpio, direction, value);
++    }
++    
++    public int gpioRegKeyEvent(int gpio) throws android.os.RemoteException
++    {
++        return native_gpioRegKeyEvent(gpio);
++    }
++    
++    public int gpioUnregKeyEvent(int gpio) throws android.os.RemoteException
++    {
++        return native_gpioUnregKeyEvent(gpio);
++    }
++    
++    public int gpioGetNumber() throws android.os.RemoteException
++    {
++        return native_gpioGetNumber();
++    }
++    
++    public GpioService()
++    {
++        native_gpioOpen();
++    }
++
++    public static native int native_gpioOpen();
++    public static native void native_gpioClose();
++    public static native int native_gpioWrite(int gpio, int value);
++    public static native int native_gpioRead(int gpio);
++    public static native int native_gpioDirection(int gpio, int direction, int value);
++    public static native int native_gpioRegKeyEvent(int gpio);
++    public static native int native_gpioUnregKeyEvent(int gpio);
++    public static native int native_gpioGetNumber();
++}
+diff --git a/frameworks/base/services/core/jni/Android.mk b/frameworks/base/services/core/jni/Android.mk
+old mode 100644
+new mode 100755
+index d81cdd9..8d9718b
+--- a/frameworks/base/services/core/jni/Android.mk
++++ b/frameworks/base/services/core/jni/Android.mk
+@@ -24,6 +24,7 @@ LOCAL_SRC_FILES += \
+     $(LOCAL_REL_DIR)/com_android_server_UsbDeviceManager.cpp \
+     $(LOCAL_REL_DIR)/com_android_server_UsbHostManager.cpp \
+     $(LOCAL_REL_DIR)/com_android_server_VibratorService.cpp \
++	$(LOCAL_REL_DIR)/com_android_server_GpioService.cpp \
+     $(LOCAL_REL_DIR)/com_android_server_PersistentDataBlockService.cpp \
+     $(LOCAL_REL_DIR)/onload.cpp
+ 
+diff --git a/frameworks/base/services/core/jni/com_android_server_GpioService.cpp b/frameworks/base/services/core/jni/com_android_server_GpioService.cpp
+new file mode 100755
+index 0000000..41fbe06
+--- /dev/null
++++ b/frameworks/base/services/core/jni/com_android_server_GpioService.cpp
+@@ -0,0 +1,104 @@
++#include "jni.h"
++#include "JNIHelp.h"
++#include "android_runtime/AndroidRuntime.h"
++#include <utils/misc.h>
++#include <utils/Log.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <fcntl.h>
++#include <sys/ioctl.h>
++#include <hardware/gpio_hal.h>
++
++namespace android
++{
++
++static struct gpio_device_t* gpioDevice;
++
++jint gpioOpen(JNIEnv *env, jobject cls)
++{
++    jint err;
++    hw_module_t* module;
++    hw_device_t* device;
++    
++    ALOGI("native gpioOpen ...");
++
++    // hw_get_module finds the library by "gpio" (this is the id of hal)
++    err = hw_get_module("gpio", (hw_module_t const**)&module);
++    if(err == 0) {
++        // Get device : module->methods->open
++        err = module->methods->open(module, NULL, &device);
++        if(err == 0) {
++            // Call gpio_open
++            gpioDevice = (gpio_device_t *)device;
++            return gpioDevice->gpio_open(gpioDevice);
++        } else {
++            return -1;
++        }
++    }
++
++    return -1;
++}
++
++void gpioClose(JNIEnv *env, jobject cls)
++{
++    ALOGI("native gpioClose ...");
++}
++
++jint gpioWrite(JNIEnv *env, jobject cls, jint gpio, jint value)
++{
++    ALOGI("native gpioWrite gpio=%d, value=%d", gpio, value);
++    return gpioDevice->gpio_write(gpioDevice, gpio, value);
++}
++
++jint gpioRead(JNIEnv *env, jobject cls, jint gpio)
++{
++    ALOGI("native gpioRead gpio=%d", gpio);
++    return gpioDevice->gpio_read(gpioDevice, gpio);
++}
++
++jint gpioDirection(JNIEnv *env, jobject cls, jint gpio, jint direction, jint value)
++{
++    ALOGI("native gpioRead gpio=%d", gpio);
++    return gpioDevice->gpio_direction(gpioDevice, gpio, direction, value);
++}
++
++jint gpioRegKeyEvent(JNIEnv *env, jobject cls, jint gpio)
++{
++    ALOGI("native gpioRegKeyEvent gpio=%d", gpio);
++    return gpioDevice->gpio_reg_key_event(gpioDevice, gpio);
++}
++
++jint gpioUnregKeyEvent(JNIEnv *env, jobject cls, jint gpio)
++{
++    ALOGI("native gpioUnregKeyEvent gpio=%d", gpio);
++    return gpioDevice->gpio_unreg_key_event(gpioDevice, gpio);
++}
++
++jint gpioGetNumber(JNIEnv *env, jobject cls)
++{
++    ALOGI("native gpioGetNumber");
++    return gpioDevice->gpio_get_number(gpioDevice);
++}
++
++// Register native methods
++static const JNINativeMethod methods[] = {
++    {"native_gpioOpen", "()I", (void *)gpioOpen},
++    {"native_gpioClose", "()V", (void *)gpioClose},
++    {"native_gpioWrite", "(II)I", (void *)gpioWrite},
++    {"native_gpioRead", "(I)I", (void *)gpioRead},
++    {"native_gpioDirection", "(III)I", (void *)gpioDirection},
++    {"native_gpioRegKeyEvent", "(I)I", (void *)gpioRegKeyEvent},
++    {"native_gpioUnregKeyEvent", "(I)I", (void *)gpioUnregKeyEvent},
++    {"native_gpioGetNumber", "()I", (void *)gpioGetNumber},
++};
++    
++int register_android_server_GpioService(JNIEnv *env)
++{
++    // The Java method corresponding to the local method GpioService
++    return jniRegisterNativeMethods(env, "com/android/server/GpioService",
++                                    methods, NELEM(methods));
++}
++
++}
+diff --git a/frameworks/base/services/core/jni/onload.cpp b/frameworks/base/services/core/jni/onload.cpp
+old mode 100644
+new mode 100755
+index 7b2e408..4d87c51
+--- a/frameworks/base/services/core/jni/onload.cpp
++++ b/frameworks/base/services/core/jni/onload.cpp
+@@ -34,6 +34,7 @@ int register_android_server_SystemServer(JNIEnv* env);
+ int register_android_server_UsbDeviceManager(JNIEnv* env);
+ int register_android_server_UsbHostManager(JNIEnv* env);
+ int register_android_server_VibratorService(JNIEnv* env);
++int register_android_server_GpioService(JNIEnv* env);
+ int register_android_server_location_GpsLocationProvider(JNIEnv* env);
+ int register_android_server_location_FlpHardwareProvider(JNIEnv* env);
+ int register_android_server_connectivity_Vpn(JNIEnv* env);
+@@ -67,6 +68,7 @@ extern "C" jint JNI_OnLoad(JavaVM* vm, void* reserved)
+     register_android_server_UsbDeviceManager(env);
+     register_android_server_UsbHostManager(env);
+     register_android_server_VibratorService(env);
++    register_android_server_GpioService(env);
+     register_android_server_SystemServer(env);
+     register_android_server_location_GpsLocationProvider(env);
+     register_android_server_location_FlpHardwareProvider(env);
+diff --git a/frameworks/base/services/java/com/android/server/SystemServer.java b/frameworks/base/services/java/com/android/server/SystemServer.java
+old mode 100644
+new mode 100755
+index 618044f..119e1d3
+--- a/frameworks/base/services/java/com/android/server/SystemServer.java
++++ b/frameworks/base/services/java/com/android/server/SystemServer.java
+@@ -471,6 +471,10 @@ public final class SystemServer {
+             Slog.i(TAG, "Vibrator Service");
+             vibrator = new VibratorService(context);
+             ServiceManager.addService("vibrator", vibrator);
++            
++            Slog.i(TAG, "Gpio Service");
++            GpioService gpio = new GpioService();
++            ServiceManager.addService("gpio", gpio);
+ 
+             Slog.i(TAG, "Consumer IR Service");
+             consumerIr = new ConsumerIrService(context);
+diff --git a/frameworks/native/include/android/keycodes.h b/frameworks/native/include/android/keycodes.h
+old mode 100644
+new mode 100755
+index ff998df..19afd8a
+--- a/frameworks/native/include/android/keycodes.h
++++ b/frameworks/native/include/android/keycodes.h
+@@ -302,12 +302,22 @@ enum {
+     AKEYCODE_TV_CONTENTS_MENU = 256,
+     AKEYCODE_TV_MEDIA_CONTEXT_MENU = 257,
+     AKEYCODE_TV_TIMER_PROGRAMMING = 258,
++    AKEYCODE_HELP = 259,
+     AKEYCODE_TV_KEYMOUSE_LEFT = 260,
+     AKEYCODE_TV_KEYMOUSE_RIGHT = 261,
+     AKEYCODE_TV_KEYMOUSE_UP = 262,
+     AKEYCODE_TV_KEYMOUSE_DOWN = 263,
+     AKEYCODE_TV_KEYMOUSE_MODE_SWITCH = 264,
+-    AKEYCODE_HELP            = 259
++    AKEYCODE_GPIO_0 = 275,
++    AKEYCODE_GPIO_1 = 276,
++    AKEYCODE_GPIO_2 = 277,
++    AKEYCODE_GPIO_3 = 278,
++    AKEYCODE_GPIO_4 = 279,
++    AKEYCODE_GPIO_5 = 280,
++    AKEYCODE_GPIO_6 = 281,
++    AKEYCODE_GPIO_7 = 282,
++    AKEYCODE_GPIO_8 = 283,
++    AKEYCODE_GPIO_9 = 284
+ 
+     // NOTE: If you add a new keycode here you must also add it to several other files.
+     //       Refer to frameworks/base/core/java/android/view/KeyEvent.java for the full list.
+diff --git a/frameworks/native/include/input/InputEventLabels.h b/frameworks/native/include/input/InputEventLabels.h
+old mode 100644
+new mode 100755
+index d7a06dd..7b9beb5
+--- a/frameworks/native/include/input/InputEventLabels.h
++++ b/frameworks/native/include/input/InputEventLabels.h
+@@ -304,6 +304,16 @@ static const InputEventLabel KEYCODES[] = {
+     DEFINE_KEYCODE(TV_KEYMOUSE_DOWN),
+     DEFINE_KEYCODE(TV_KEYMOUSE_MODE_SWITCH),
+     DEFINE_KEYCODE(HELP),
++    DEFINE_KEYCODE(GPIO_0),
++    DEFINE_KEYCODE(GPIO_1),
++    DEFINE_KEYCODE(GPIO_2),
++    DEFINE_KEYCODE(GPIO_3),
++    DEFINE_KEYCODE(GPIO_4),
++    DEFINE_KEYCODE(GPIO_5),
++    DEFINE_KEYCODE(GPIO_6),
++    DEFINE_KEYCODE(GPIO_7),
++    DEFINE_KEYCODE(GPIO_8),
++    DEFINE_KEYCODE(GPIO_9),
+ 
+     { NULL, 0 }
+ };
+diff --git a/hardware/libhardware/include/hardware/gpio_hal.h b/hardware/libhardware/include/hardware/gpio_hal.h
+new file mode 100755
+index 0000000..ec01ca5
+--- /dev/null
++++ b/hardware/libhardware/include/hardware/gpio_hal.h
+@@ -0,0 +1,24 @@
++#ifndef ANDROID_GPIO_INTERFACE_H
++#define ANDROID_GPIO_INTERFACE_H
++
++#include <stdint.h>
++#include <sys/cdefs.h>
++#include <sys/types.h>
++#include <hardware/hardware.h>
++
++__BEGIN_DECLS
++struct gpio_device_t {
++    struct hw_device_t common;
++
++    int (*gpio_open)(struct gpio_device_t* dev);
++    int (*gpio_write)(struct gpio_device_t* dev, int gpio, int value);
++    int (*gpio_read)(struct gpio_device_t* dev, int gpio);
++    int (*gpio_direction)(struct gpio_device_t* dev, int gpio, int direction, int value);
++    int (*gpio_reg_key_event)(struct gpio_device_t* dev, int gpio);
++    int (*gpio_unreg_key_event)(struct gpio_device_t* dev, int gpio);
++    int (*gpio_get_number)(struct gpio_device_t* dev);
++};
++
++__END_DECLS
++
++#endif  // ANDROID_GPIO_INTERFACE_H
+diff --git a/hardware/libhardware/modules/Android.mk b/hardware/libhardware/modules/Android.mk
+old mode 100644
+new mode 100755
+index 0725d3e..e155e43
+--- a/hardware/libhardware/modules/Android.mk
++++ b/hardware/libhardware/modules/Android.mk
+@@ -1,4 +1,4 @@
+ hardware_modules := gralloc hwcomposer audio nfc nfc-nci local_time \
+ 	power usbaudio audio_remote_submix camera consumerir sensors vibrator \
+-	tv_input fingerprint
++	tv_input fingerprint gpio
+ include $(call all-named-subdir-makefiles,$(hardware_modules))
+diff --git a/hardware/libhardware/modules/gpio/Android.mk b/hardware/libhardware/modules/gpio/Android.mk
+new file mode 100755
+index 0000000..ffb3744
+--- /dev/null
++++ b/hardware/libhardware/modules/gpio/Android.mk
+@@ -0,0 +1,29 @@
++# Copyright (C) 2012 The Android Open Source Project
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++LOCAL_PATH := $(call my-dir)
++
++include $(CLEAR_VARS)
++
++LOCAL_MODULE := gpio.default
++
++LOCAL_MODULE_RELATIVE_PATH := hw
++LOCAL_PROPRIETARY_MODULE := true
++LOCAL_SRC_FILES := gpio_hal.c
++LOCAL_HEADER_LIBRARIES := libhardware_headers
++LOCAL_SHARED_LIBRARIES := liblog libcutils libutils
++LOCAL_MODULE_TAGS := optional
++
++include $(BUILD_SHARED_LIBRARY)
++
+diff --git a/hardware/libhardware/modules/gpio/gpio_hal.c b/hardware/libhardware/modules/gpio/gpio_hal.c
+new file mode 100755
+index 0000000..c9b0d5d
+--- /dev/null
++++ b/hardware/libhardware/modules/gpio/gpio_hal.c
+@@ -0,0 +1,203 @@
++#include <hardware/hardware.h>
++#include <cutils/log.h>
++#include <stdio.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <errno.h>
++#include <hardware/gpio_hal.h>
++#include <stdlib.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <sys/ioctl.h>
++#include <utils/Log.h>
++
++#define DEVICE "/dev/topband_gpio"
++
++#define GPIO_IOC_MAGIC  'f'
++#define GPIO_IOC_SET_VALUE  _IOW(GPIO_IOC_MAGIC, 1, int)
++#define GPIO_IOC_GET_VALUE  _IOR(GPIO_IOC_MAGIC, 2, int)
++#define GPIO_IOC_SET_DIRECTION _IOW(GPIO_IOC_MAGIC, 3, int)
++#define GPIO_IOC_REG_KEY_EVENT _IOW(GPIO_IOC_MAGIC, 4, int)
++#define GPIO_IOC_UNREG_KEY_EVENT _IOW(GPIO_IOC_MAGIC, 5, int)
++#define GPIO_IOC_GET_NUMBER _IOW(GPIO_IOC_MAGIC, 6, int)
++
++#define TOPBAND_GPIO_IOC_MAXNR 6
++
++#define GPIO_DIRECTION_MASK 0x01
++#define GPIO_VALUE_MASK 0x02
++
++static int fd;
++
++static int gpio_close(struct hw_device_t* device)
++{
++    close(fd);
++    return 0;
++}
++
++static int gpio_open(struct gpio_device_t* dev)
++{
++    fd = open(DEVICE, O_RDWR);
++    ALOGI("gpio_open : %d", fd);
++
++    if(fd >= 0) {
++        return 0;
++    } else {
++        return -1;
++    }
++}
++
++static int gpio_write(struct gpio_device_t* dev, int gpio, int value)
++{
++    int ret = 0;
++    int data = 0;
++    
++    if(fd < 0) {
++        ret = gpio_open(dev);
++        if (ret < 0) {
++            return -1;
++        }
++    }
++
++    data = ((gpio & 0x0f) << 4) | (value & 0x0f);
++    ret = ioctl(fd, GPIO_IOC_SET_VALUE, &data);
++    
++    ALOGI("gpio_write: gpio=%d, value=%d, data=%d, ret=%d", gpio, value, data, ret);
++    
++    return ret;
++}
++
++static int gpio_read(struct gpio_device_t* dev, int gpio)
++{
++    int ret = 0;
++    int data = 0;
++    
++    if(fd < 0) {
++        ret = gpio_open(dev);
++        if (ret < 0) {
++            return -1;
++        }
++    }
++
++    data = (gpio & 0x0f) << 4;
++    ret = ioctl(fd, GPIO_IOC_GET_VALUE, &data);
++    
++    ALOGI("gpio_read: gpio=%d, data=%d, ret=%d", gpio, data, ret);
++    if (ret >= 0) {
++        ret = data;
++    }
++    
++    return ret;
++}
++
++static int gpio_direction(struct gpio_device_t* dev, int gpio, int direction, int value)
++{
++    int ret = 0;
++    int data = 0;
++    
++    if(fd < 0) {
++        ret = gpio_open(dev);
++        if (ret < 0) {
++            return -1;
++        }
++    }
++
++    data = ((gpio & 0x0f) << 4) | (direction > 0 ? GPIO_DIRECTION_MASK : 0x00) | (value > 0 ? GPIO_VALUE_MASK : 0x00);
++    ret = ioctl(fd, GPIO_IOC_SET_DIRECTION, &data);
++    
++    ALOGI("gpio_direction: gpio=%d, direction=%d, value=%d, data=%d, ret=%d", gpio, direction, value, data, ret);
++    
++    return ret;
++}
++
++static int gpio_reg_key_event(struct gpio_device_t* dev, int gpio)
++{
++    int ret = 0;
++    int data = 0;
++    
++    if(fd < 0) {
++        ret = gpio_open(dev);
++        if (ret < 0) {
++            return -1;
++        }
++    }
++
++    data = (gpio & 0x0f) << 4;
++    ret = ioctl(fd, GPIO_IOC_REG_KEY_EVENT, &data);
++    
++    ALOGI("gpio_reg_key_event: gpio=%d, data=%d, ret=%d", gpio, data, ret);
++    
++    return ret;
++}
++
++static int gpio_unreg_key_event(struct gpio_device_t* dev, int gpio)
++{
++    int ret = 0;
++    int data = 0;
++    
++    if(fd < 0) {
++        ret = gpio_open(dev);
++        if (ret < 0) {
++            return -1;
++        }
++    }
++
++    data = (gpio & 0x0f) << 4;
++    ret = ioctl(fd, GPIO_IOC_UNREG_KEY_EVENT, &data);
++    
++    ALOGI("gpio_unreg_key_event: gpio=%d, data=%d, ret=%d", gpio, data, ret);
++    
++    return ret;
++}
++
++static int gpio_get_number(struct gpio_device_t* dev)
++{
++    int ret = 0;
++    int data = 0;
++    
++    if(fd < 0) {
++        ret = gpio_open(dev);
++        if (ret < 0) {
++            return -1;
++        }
++    }
++
++    ret = ioctl(fd, GPIO_IOC_GET_NUMBER, &data);
++    
++    ALOGI("gpio_get_number: data=%d, ret=%d", data, ret);
++    if (ret >= 0) {
++        ret = data;
++    }
++    
++    return ret;
++}
++
++static struct gpio_device_t gpio_dev = {
++    .common = {
++        .tag   = HARDWARE_DEVICE_TAG,
++        .close = gpio_close,
++    },
++    .gpio_open  = gpio_open,
++    .gpio_write  = gpio_write,
++    .gpio_read  = gpio_read,
++    .gpio_direction  = gpio_direction,
++    .gpio_reg_key_event  = gpio_reg_key_event,
++    .gpio_unreg_key_event  = gpio_unreg_key_event,
++    .gpio_get_number  = gpio_get_number,
++};
++
++static int gpio_device_open(const struct hw_module_t* module, const char* id,
++                           struct hw_device_t** device)
++{
++    *device = &gpio_dev;
++    return 0;
++}
++
++static struct hw_module_methods_t gpio_module_methods = {
++    .open = gpio_device_open,
++};
++
++struct hw_module_t HAL_MODULE_INFO_SYM = {
++    .tag = HARDWARE_MODULE_TAG,
++    .id = "gpio",
++    .methods = &gpio_module_methods,
++};
+diff --git a/kernel/arch/arm/boot/dts/topband-x28-mipi-800x1280.dts b/kernel/arch/arm/boot/dts/topband-x28-mipi-800x1280.dts
+index 8975f01..89c34a0 100755
+--- a/kernel/arch/arm/boot/dts/topband-x28-mipi-800x1280.dts
++++ b/kernel/arch/arm/boot/dts/topband-x28-mipi-800x1280.dts
+@@ -3,6 +3,45 @@
+ #include "topband-x28-rtl8723.dtsi"
+ #include "lcd-T101VB09H01-mipi800x1280.dtsi"
+ 
++	topband_gpio: topband_gpio { 
++	   status = "okay";
++	   compatible = "topband,gpio";
++	   
++	   topband,gpios {
++			topband,gpio0 {
++				topband,gpio = <&gpio0 GPIO_B6 GPIO_ACTIVE_HIGH>;
++			};
++			topband,gpio1 {
++				topband,gpio = <&gpio0 GPIO_B5 GPIO_ACTIVE_HIGH>;
++			};
++			topband,gpio2 {
++				topband,gpio = <&gpio0 GPIO_B1 GPIO_ACTIVE_HIGH>;
++			};
++			topband,gpio3 {
++				topband,gpio = <&gpio0 GPIO_B0 GPIO_ACTIVE_HIGH>;
++			};
++			topband,gpio4 {
++				topband,gpio = <&gpio0 GPIO_D1 GPIO_ACTIVE_HIGH>;
++			};
++			topband,gpio5 {
++				topband,gpio = <&gpio1 GPIO_A3 GPIO_ACTIVE_HIGH>;
++			};
++			topband,gpio6 {
++				topband,gpio = <&gpio1 GPIO_B3 GPIO_ACTIVE_HIGH>;
++			};
++		};
++	};
+diff --git a/kernel/arch/arm/configs/topband_common_defconfig b/kernel/arch/arm/configs/topband_common_defconfig
+index 654ab8d..dbdf835 100755
+--- a/kernel/arch/arm/configs/topband_common_defconfig
++++ b/kernel/arch/arm/configs/topband_common_defconfig
+ CONFIG_LT8911_DRIVER=y
+ CONFIG_LT8911EXB_DRIVER=y
++CONFIG_TOPBAND_GPIO_DRIVER=y
+diff --git a/kernel/drivers/misc/Kconfig b/kernel/drivers/misc/Kconfig
+old mode 100644
+new mode 100755
+index ff1aff6..fa54e5b
+--- a/kernel/drivers/misc/Kconfig
++++ b/kernel/drivers/misc/Kconfig
+@@ -562,4 +562,5 @@ source "drivers/misc/carma/Kconfig"
+ source "drivers/misc/altera-stapl/Kconfig"
+ source "drivers/misc/mei/Kconfig"
+ source "drivers/misc/vmw_vmci/Kconfig"
++source "drivers/misc/topband_gpio/Kconfig"
+ endmenu
+diff --git a/kernel/drivers/misc/Makefile b/kernel/drivers/misc/Makefile
+old mode 100644
+new mode 100755
+index b824cf9..8edfb7f
+--- a/kernel/drivers/misc/Makefile
++++ b/kernel/drivers/misc/Makefile
+@@ -59,3 +59,4 @@ obj-$(CONFIG_UID_CPUTIME) += uid_cputime.o
+ 
+ obj-$(CONFIG_5V_EN)	+= 5v_en.o
+ obj-$(CONFIG_ROCKCHIP_SCR) += rk_scr.o
++obj-$(CONFIG_TOPBAND_GPIO_DRIVER) += topband_gpio/
+diff --git a/kernel/drivers/misc/topband_gpio/Kconfig b/kernel/drivers/misc/topband_gpio/Kconfig
+new file mode 100755
+index 0000000..7db3108
+--- /dev/null
++++ b/kernel/drivers/misc/topband_gpio/Kconfig
+@@ -0,0 +1,8 @@
++#
++#  TOPBAND GPIO driver configuration
++#
++config TOPBAND_GPIO_DRIVER
++       tristate  "Topband GPIO driver"    
++       default n
++       help
++           Topband GPIO driver for application control
+\ No newline at end of file
+diff --git a/kernel/drivers/misc/topband_gpio/Makefile b/kernel/drivers/misc/topband_gpio/Makefile
+new file mode 100755
+index 0000000..0ee63e8
+--- /dev/null
++++ b/kernel/drivers/misc/topband_gpio/Makefile
+@@ -0,0 +1 @@
++obj-$(CONFIG_TOPBAND_GPIO_DRIVER) += topband_gpio.o
+\ No newline at end of file
+diff --git a/kernel/drivers/misc/topband_gpio/topband_gpio.c b/kernel/drivers/misc/topband_gpio/topband_gpio.c
+new file mode 100755
+index 0000000..158d8f5
+--- /dev/null
++++ b/kernel/drivers/misc/topband_gpio/topband_gpio.c
+@@ -0,0 +1,501 @@
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/device.h>
++#include <linux/errno.h>
++#include <linux/err.h>
++#include <linux/kernel.h>
++#include <linux/ctype.h>
++#include <linux/delay.h>
++#include <linux/idr.h>
++#include <linux/sched.h>
++#include <linux/slab.h>
++#include <linux/interrupt.h>
++#include <linux/signal.h>
++#include <linux/pm.h>
++#include <linux/notifier.h>
++#include <linux/fb.h>
++#include <linux/input.h>
++#include <linux/ioport.h>
++#include <linux/io.h>
++#include <linux/clk.h>
++#include <linux/pinctrl/consumer.h>
++#include <linux/platform_device.h>
++#include <linux/kthread.h>
++#include <linux/time.h>
++#include <linux/timer.h>
++#include <linux/regulator/consumer.h>
++#include <linux/gpio.h>
++#include <linux/of.h>
++#include <linux/of_irq.h>
++#include <linux/of_gpio.h>
++#include <linux/of_platform.h>
++#include <linux/miscdevice.h>
++#include <linux/uaccess.h>
++
++#define TOPBAND_GPIO_NAME "topband,gpio"
++#define TOPBAND_GPIO_MAX 20
++#define TOPBAND_GPIO_DIRECTION_MASK 0x01
++#define TOPBAND_GPIO_VALUE_MASK 0x02
++
++// ioctl cmd
++#define TOPBAND_GPIO_IOC_MAGIC  'f'
++
++#define TOPBAND_GPIO_IOC_SET_VALUE _IOW(TOPBAND_GPIO_IOC_MAGIC, 1, int)
++#define TOPBAND_GPIO_IOC_GET_VALUE _IOR(TOPBAND_GPIO_IOC_MAGIC, 2, int)
++#define TOPBAND_GPIO_IOC_SET_DIRECTION _IOW(TOPBAND_GPIO_IOC_MAGIC, 3, int)
++#define TOPBAND_GPIO_IOC_REG_KEY_EVENT _IOW(TOPBAND_GPIO_IOC_MAGIC, 4, int)
++#define TOPBAND_GPIO_IOC_UNREG_KEY_EVENT _IOW(TOPBAND_GPIO_IOC_MAGIC, 5, int)
++#define TOPBAND_GPIO_IOC_GET_NUMBER _IOW(TOPBAND_GPIO_IOC_MAGIC, 6, int)
++
++#define TOPBAND_GPIO_IOC_MAXNR 6
++
++static int gKeyCode[TOPBAND_GPIO_MAX] = {
++    KEY_GPIO_0,
++    KEY_GPIO_1, 
++    KEY_GPIO_2, 
++    KEY_GPIO_3, 
++    KEY_GPIO_4, 
++    KEY_GPIO_5, 
++    KEY_GPIO_6, 
++    KEY_GPIO_7, 
++    KEY_GPIO_8, 
++    KEY_GPIO_9};
++
++struct topband_gpio_data {
++    struct platform_device *platform_dev;
++    struct miscdevice topband_gpio_device;
++    struct input_dev *input_dev;
++    int gpios[TOPBAND_GPIO_MAX];
++    int irqs[TOPBAND_GPIO_MAX];
++    int gpio_number;
++};
++
++static void topband_gpio_free_io_irq(struct topband_gpio_data *topband_gpio, int gpio)
++{
++    if (gpio >= 0 && gpio < topband_gpio->gpio_number) {
++        if (topband_gpio->irqs[gpio] > 0) {
++            free_irq(topband_gpio->irqs[gpio], topband_gpio);
++            topband_gpio->irqs[gpio] = -1;
++        }
++    }
++}
++
++static void topband_gpio_free_irq(struct topband_gpio_data *topband_gpio)
++{
++    int i;
++    for (i=0; i<topband_gpio->gpio_number; i++) {
++        topband_gpio_free_io_irq(topband_gpio, i);
++    }
++}
++
++static void topband_gpio_free_io_port(struct topband_gpio_data *topband_gpio)
++{
++    int i;
++    for (i=0; i<topband_gpio->gpio_number; i++) {
++        if(gpio_is_valid(topband_gpio->gpios[i])) {
++            gpio_free(topband_gpio->gpios[i]);
++        }
++    }
++    return;
++}
++
++static int topband_gpio_parse_dt(struct device *dev,
++                              struct topband_gpio_data *topband_gpio)
++{
++    int index = 0;
++    struct device_node *np = dev->of_node;
++    struct device_node *root  = of_get_child_by_name(np, "topband,gpios");
++    struct device_node *child;
++
++    for_each_child_of_node(root, child) {
++        if (index >= TOPBAND_GPIO_MAX) {
++            dev_err(dev, "The number of GPIOs exceeds the maximum:%d value to break", TOPBAND_GPIO_MAX);
++            break;
++        }
++        
++        topband_gpio->gpios[index] = of_get_named_gpio(child, "topband,gpio", 0);
++        if(!gpio_is_valid(topband_gpio->gpios[index])) {
++            dev_err(dev, "No valid gpio[%d]", index);
++            return -1;
++        }
++
++        index++;
++	}
++
++    topband_gpio->gpio_number = index;
++
++    return 0;
++}
++
++static int topband_gpio_request_io_port(struct topband_gpio_data *topband_gpio)
++{
++    int ret = 0;
++    int i;
++    for (i=0; i<topband_gpio->gpio_number; i++) {
++        if(gpio_is_valid(topband_gpio->gpios[i])) {
++            ret = gpio_request(topband_gpio->gpios[i], "topband_gpio");
++
++            if(ret < 0) {
++                dev_err(&topband_gpio->platform_dev->dev,
++                        "Failed to request GPIO[%d]:%d, ERRNO:%d\n",
++                        i, (s32)topband_gpio->gpios[i], ret);
++                return -ENODEV;
++            }
++
++            gpio_direction_input(topband_gpio->gpios[i]);
++            dev_info(&topband_gpio->platform_dev->dev, "Success request gpio[%d]\n", i);
++        }
++    }
++
++    return ret;
++}
++
++static s8 topband_gpio_request_input_dev(struct topband_gpio_data *topband_gpio)
++{
++    s8 ret = -1;
++
++    topband_gpio->input_dev = input_allocate_device();
++
++    if(topband_gpio->input_dev == NULL) {
++        dev_err(&topband_gpio->platform_dev->dev, "Failed to allocate input device\n");
++        return -ENOMEM;
++    }
++
++    input_set_capability(topband_gpio->input_dev, EV_KEY, KEY_GPIO_0);
++    input_set_capability(topband_gpio->input_dev, EV_KEY, KEY_GPIO_1);
++    input_set_capability(topband_gpio->input_dev, EV_KEY, KEY_GPIO_2);
++    input_set_capability(topband_gpio->input_dev, EV_KEY, KEY_GPIO_3);
++    input_set_capability(topband_gpio->input_dev, EV_KEY, KEY_GPIO_4);
++    input_set_capability(topband_gpio->input_dev, EV_KEY, KEY_GPIO_5);
++    input_set_capability(topband_gpio->input_dev, EV_KEY, KEY_GPIO_6);
++    input_set_capability(topband_gpio->input_dev, EV_KEY, KEY_GPIO_7);
++    input_set_capability(topband_gpio->input_dev, EV_KEY, KEY_GPIO_8);
++    input_set_capability(topband_gpio->input_dev, EV_KEY, KEY_GPIO_9);
++
++    ret = input_register_device(topband_gpio->input_dev);
++
++    if(ret) {
++        dev_err(&topband_gpio->platform_dev->dev, "Register %s input device failed\n",
++                topband_gpio->input_dev->name);
++        input_free_device(topband_gpio->input_dev);
++        return -ENODEV;
++    }
++
++    return 0;
++}
++
++
++static int topband_gpio_set_value(int gpio, int value) {
++    if(gpio_is_valid(gpio)) {
++        gpio_set_value(gpio, value);
++        return 0;
++    }
++    return -1;
++}
++
++static int topband_gpio_get_value(int gpio) {
++    if(gpio_is_valid(gpio)) {
++        return gpio_get_value(gpio);
++    }
++    return -1;
++}
++
++static int topband_gpio_set_direction(int gpio, int value) {
++    int direction = 0;
++    int data = 0;
++    
++    if(gpio_is_valid(gpio)) {
++        direction = value & TOPBAND_GPIO_DIRECTION_MASK;
++        data = value & TOPBAND_GPIO_VALUE_MASK;
++        if (direction > 0) {
++            return gpio_direction_output(gpio, data);
++        } else {
++            return gpio_direction_input(gpio);
++        }
++    }
++    return -1;
++}
++
++
++static int topband_gpio_write(struct topband_gpio_data *topband_gpio, int gpio, int value) {
++    int ret = -1;
++
++    if (gpio < topband_gpio->gpio_number) {
++       ret = topband_gpio_set_value(topband_gpio->gpios[gpio], value); 
++    }
++
++    return ret;
++}
++
++static int topband_gpio_read(struct topband_gpio_data *topband_gpio, int gpio) {
++    int ret = -1;
++
++    if (gpio < topband_gpio->gpio_number) {
++       ret = topband_gpio_get_value(topband_gpio->gpios[gpio]); 
++    }
++
++    return ret;
++}
++
++static int topband_gpio_direction(struct topband_gpio_data *topband_gpio, int gpio, int value) {
++    int ret = -1;
++
++    if (gpio < topband_gpio->gpio_number) {
++       ret = topband_gpio_set_direction(topband_gpio->gpios[gpio], value); 
++    }
++
++    return ret;
++}
++
++static irqreturn_t topband_gpio_irq_handle(int irq, void *dev_id)
++{
++    struct topband_gpio_data *topband_gpio = dev_id;
++    int gpio = -1;
++    int value = -1;
++    int i;
++
++    for (i=0; i<topband_gpio->gpio_number; i++) {
++        if (irq == topband_gpio->irqs[i]) {
++            gpio = i;
++        }
++    }
++
++    if (gpio >= 0 && gpio < topband_gpio->gpio_number) {
++        value = topband_gpio_get_value(topband_gpio->gpios[gpio]);
++        if (value >= 0) {
++           input_report_key(topband_gpio->input_dev, gKeyCode[gpio], !value);
++           input_sync(topband_gpio->input_dev); 
++        }
++    }
++
++    return IRQ_HANDLED;
++}
++
++static int topband_gpio_request_irq(struct topband_gpio_data *topband_gpio, int gpio)
++{
++    int ret = 0;
++
++    /* use irq */
++    if(gpio_is_valid(topband_gpio->gpios[gpio]) || topband_gpio->irqs[gpio] > 0) {
++        if(gpio_is_valid(topband_gpio->gpios[gpio]))
++            topband_gpio->irqs[gpio] = gpio_to_irq(topband_gpio->gpios[gpio]);
++
++        dev_info(&topband_gpio->platform_dev->dev, "INT num %d, trigger type:%d\n",
++                 topband_gpio->irqs[gpio], IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING);
++        ret = request_threaded_irq(topband_gpio->irqs[gpio], NULL,
++                                   topband_gpio_irq_handle,
++                                   IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
++                                   topband_gpio->platform_dev->name,
++                                   topband_gpio);
++
++        if(ret < 0) {
++            dev_err(&topband_gpio->platform_dev->dev,
++                    "Failed to request irq %d\n", topband_gpio->irqs[gpio]);
++        }
++    }
++
++    return ret;
++}
++
++static int topband_gpio_dev_open(struct inode *inode, struct file *filp)
++{
++	int ret = 0;
++
++	struct topband_gpio_data *topband_gpio = container_of(filp->private_data,
++							   struct topband_gpio_data,
++							   topband_gpio_device);
++	filp->private_data = topband_gpio;
++	dev_info(&topband_gpio->platform_dev->dev,
++		 "device node major=%d, minor=%d\n", imajor(inode), iminor(inode));
++
++	return ret;
++}
++
++static long topband_gpio_dev_ioctl(struct file *pfile,
++					 unsigned int cmd, unsigned long arg)
++{
++    int ret = 0;
++    int data = 0;
++    int gpio = 0, value = 0;
++	struct topband_gpio_data *topband_gpio = pfile->private_data;
++
++    if (_IOC_TYPE(cmd) != TOPBAND_GPIO_IOC_MAGIC) 
++        return -EINVAL;
++    if (_IOC_NR(cmd) > TOPBAND_GPIO_IOC_MAXNR) 
++        return -EINVAL;
++
++    if (_IOC_DIR(cmd) & _IOC_READ)
++        ret = !access_ok(VERIFY_WRITE, (void *)arg, _IOC_SIZE(cmd));
++    else if (_IOC_DIR(cmd) & _IOC_WRITE)
++        ret = !access_ok(VERIFY_READ, (void *)arg, _IOC_SIZE(cmd));
++    if (ret) 
++        return -EFAULT;
++
++    if (copy_from_user(&data, (int *)arg, sizeof(int))) {
++        dev_err(&topband_gpio->platform_dev->dev, 
++            "%s, copy from user failed\n", __func__);
++        return -EFAULT;
++    }
++    gpio = (data >> 4) & 0x0f;
++    value = data & 0x0f;
++    
++    dev_info(&topband_gpio->platform_dev->dev,
++                 "%s, (%x, %lx): gpio=%d, value=%d\n", __func__, cmd,
++                 arg, gpio, value);
++    
++	switch (cmd) {
++    	case TOPBAND_GPIO_IOC_SET_VALUE:
++            ret = topband_gpio_write(topband_gpio, gpio, value);
++    		break;
++
++        case TOPBAND_GPIO_IOC_GET_VALUE:
++            ret = topband_gpio_read(topband_gpio, gpio);
++            if (ret >= 0) {
++                if (copy_to_user((int *)arg, &ret, sizeof(int))) {
++                    dev_err(&topband_gpio->platform_dev->dev, 
++                        "%s, copy to user failed\n", __func__);
++                    return -EFAULT;
++                }
++            } else {
++                dev_err(&topband_gpio->platform_dev->dev, 
++                        "%s, gpio get value failed\n", __func__);
++                    return -EFAULT;
++            }
++            break;
++
++        case TOPBAND_GPIO_IOC_SET_DIRECTION:
++            ret = topband_gpio_direction(topband_gpio, gpio, value);
++            break;
++
++        case TOPBAND_GPIO_IOC_REG_KEY_EVENT:
++            ret = topband_gpio_direction(topband_gpio, gpio, 0); // set input
++            if (ret >= 0) {
++                ret = topband_gpio_request_irq(topband_gpio, gpio);
++            } else {
++               dev_err(&topband_gpio->platform_dev->dev, 
++                        "%s, reg key event set gpio input failed\n", __func__); 
++            }
++            break;
++
++        case TOPBAND_GPIO_IOC_UNREG_KEY_EVENT:
++            topband_gpio_free_io_irq(topband_gpio, gpio);
++            break;
++
++        case TOPBAND_GPIO_IOC_GET_NUMBER:
++            if (copy_to_user((int *)arg, &topband_gpio->gpio_number, sizeof(int))) {
++                dev_err(&topband_gpio->platform_dev->dev, 
++                    "%s, copy to user failed\n", __func__);
++                return -EFAULT;
++            }
++            break;
++ 
++    	default:
++    		return -EINVAL;
++	}
++
++	return ret;
++}
++
++static const struct file_operations topband_gpio_dev_fops = {
++	.owner = THIS_MODULE,
++    .open = topband_gpio_dev_open,
++	.unlocked_ioctl = topband_gpio_dev_ioctl
++};
++
++static int topband_gpio_probe(struct platform_device *pdev)
++{
++    int ret = 0;
++    struct topband_gpio_data *topband_gpio;
++
++    topband_gpio = devm_kzalloc(&pdev->dev, sizeof(*topband_gpio), GFP_KERNEL);
++
++    if(topband_gpio == NULL) {
++        dev_err(&pdev->dev, "Failed alloc ts memory");
++        return -ENOMEM;
++    }
++
++    if(pdev->dev.of_node) {
++        ret = topband_gpio_parse_dt(&pdev->dev, topband_gpio);
++
++        if(ret) {
++            dev_err(&pdev->dev, "Failed parse dts\n");
++            goto exit_free_data;
++        }
++    }
++
++    topband_gpio->platform_dev = pdev;
++
++    ret = topband_gpio_request_io_port(topband_gpio);
++
++    if(ret < 0) {
++        dev_err(&pdev->dev, "Failed request IO port\n");
++        goto exit_free_data;
++    }
++
++    ret = topband_gpio_request_input_dev(topband_gpio);
++
++    if(ret < 0) {
++        dev_err(&pdev->dev, "Failed request IO port\n");
++        goto exit_free_io_port;
++    }
++
++    platform_set_drvdata(pdev, topband_gpio);
++
++    topband_gpio->topband_gpio_device.minor = MISC_DYNAMIC_MINOR;
++	topband_gpio->topband_gpio_device.name = "topband_gpio";
++	topband_gpio->topband_gpio_device.fops = &topband_gpio_dev_fops;
++
++	ret = misc_register(&topband_gpio->topband_gpio_device);
++	if (ret) {
++		dev_err(&pdev->dev, "Failed misc_register\n");
++		goto exit_unreg_input_dev;
++	}
++
++    dev_info(&pdev->dev, "%s, over\n", __func__);
++    return 0;
++    
++exit_unreg_input_dev:
++    input_unregister_device(topband_gpio->input_dev);
++
++exit_free_io_port:
++    topband_gpio_free_io_port(topband_gpio);
++    
++exit_free_data:
++    devm_kfree(&pdev->dev, topband_gpio);
++
++    return ret;
++}
++
++static int topband_gpio_remove(struct platform_device *pdev)
++{
++    struct topband_gpio_data *topband_gpio = platform_get_drvdata(pdev);
++    topband_gpio_free_irq(topband_gpio);
++    topband_gpio_free_io_port(topband_gpio);
++    kfree(topband_gpio);
++
++    return 0;
++}
++
++static const struct of_device_id topband_gpio_of_match[] = {
++    { .compatible =  "topband,gpio"},
++    {},
++};
++
++MODULE_DEVICE_TABLE(of, topband_gpio_of_match);
++
++static struct platform_driver topband_gpio_driver = {
++    .probe = topband_gpio_probe,
++    .remove = topband_gpio_remove,
++    .driver = {
++        .name = TOPBAND_GPIO_NAME,
++        .owner  = THIS_MODULE,
++        .of_match_table = topband_gpio_of_match,
++    },
++};
++
++module_platform_driver(topband_gpio_driver);
++
++MODULE_AUTHOR("shenhb@topband.com");
++MODULE_DESCRIPTION("Topband GPIO for application control");
++MODULE_VERSION("1.0");
++MODULE_LICENSE("GPL");
+diff --git a/kernel/include/uapi/linux/input.h b/kernel/include/uapi/linux/input.h
+old mode 100644
+new mode 100755
+index a86f530..f0aef0c
+--- a/kernel/include/uapi/linux/input.h
++++ b/kernel/include/uapi/linux/input.h
+@@ -473,6 +473,18 @@ struct input_keymap_entry {
+ 
+ #define KEY_MICMUTE		248	/* Mute / unmute the microphone */
+ 
++// GPIO Keys
++#define KEY_GPIO_0  0x260
++#define KEY_GPIO_1  0x261
++#define KEY_GPIO_2  0x262
++#define KEY_GPIO_3  0x263
++#define KEY_GPIO_4  0x264
++#define KEY_GPIO_5  0x265
++#define KEY_GPIO_6  0x266
++#define KEY_GPIO_7  0x267
++#define KEY_GPIO_8  0x268
++#define KEY_GPIO_9  0x269
++
+ /* Code 255 is reserved for special needs of AT keyboard driver */
+ 
+ #define BTN_MISC		0x100

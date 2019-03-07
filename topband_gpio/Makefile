@@ -1,0 +1,1 @@
+obj-$(CONFIG_TOPBAND_GPIO_DRIVER) += topband_gpio.o

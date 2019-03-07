@@ -1,0 +1,8 @@
+#
+#  TOPBAND GPIO driver configuration
+#
+config TOPBAND_GPIO_DRIVER
+       tristate  "Topband GPIO driver"    
+       default n
+       help
+           Topband GPIO driver for application control
