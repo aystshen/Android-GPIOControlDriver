@@ -13,37 +13,36 @@ obj-$(CONFIG_TOPBAND_GPIO_DRIVER) += topband_gpio/
 ```
 4. Modify the dts as follows:
 ```
-	&i2c2 {  
+/ {  
+	topband_gpio: topband_gpio { 
 		status = "okay";
-		topband_gpio: topband_gpio { 
-			status = "okay";
-			compatible = "topband,gpio";
-			
-			topband,gpios {
-				topband,gpio0 {
-					topband,gpio = <&gpio0 GPIO_B6 GPIO_ACTIVE_HIGH>;
-				};
-				topband,gpio1 {
-					topband,gpio = <&gpio0 GPIO_B5 GPIO_ACTIVE_HIGH>;
-				};
-				topband,gpio2 {
-					topband,gpio = <&gpio0 GPIO_B1 GPIO_ACTIVE_HIGH>;
-				};
-				topband,gpio3 {
-					topband,gpio = <&gpio0 GPIO_B0 GPIO_ACTIVE_HIGH>;
-				};
-				topband,gpio4 {
-					topband,gpio = <&gpio0 GPIO_D1 GPIO_ACTIVE_HIGH>;
-				};
-				topband,gpio5 {
-					topband,gpio = <&gpio1 GPIO_A3 GPIO_ACTIVE_HIGH>;
-				};
-				topband,gpio6 {
-					topband,gpio = <&gpio1 GPIO_B3 GPIO_ACTIVE_HIGH>;
-				};
+		compatible = "topband,gpio";
+
+		topband,gpios {
+			topband,gpio0 {
+				topband,gpio = <&gpio0 GPIO_B6 GPIO_ACTIVE_HIGH>;
+			};
+			topband,gpio1 {
+				topband,gpio = <&gpio0 GPIO_B5 GPIO_ACTIVE_HIGH>;
+			};
+			topband,gpio2 {
+				topband,gpio = <&gpio0 GPIO_B1 GPIO_ACTIVE_HIGH>;
+			};
+			topband,gpio3 {
+				topband,gpio = <&gpio0 GPIO_B0 GPIO_ACTIVE_HIGH>;
+			};
+			topband,gpio4 {
+				topband,gpio = <&gpio0 GPIO_D1 GPIO_ACTIVE_HIGH>;
+			};
+			topband,gpio5 {
+				topband,gpio = <&gpio1 GPIO_A3 GPIO_ACTIVE_HIGH>;
+			};
+			topband,gpio6 {
+				topband,gpio = <&gpio1 GPIO_B3 GPIO_ACTIVE_HIGH>;
 			};
 		};
 	};
+};
 ```
 5. Marge gpio.patch.
 
