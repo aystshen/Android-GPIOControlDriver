@@ -44,7 +44,7 @@ obj-$(CONFIG_TOPBAND_GPIO_DRIVER) += topband_gpio/
 	};
 };
 ```
-5. Marge gpio.patch.
+5. Merge gpio.patch.
 
 ## API
 [API description](./gpio_api_usage.md)
