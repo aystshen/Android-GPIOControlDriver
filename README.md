@@ -13,7 +13,8 @@ obj-$(CONFIG_TOPBAND_GPIO_DRIVER) += topband_gpio/
 ```
 4. Modify the dts as follows:
 ```
-	&i2c2 {  
+/ {  
+	topband_gpio: topband_gpio { 
 		status = "okay";
 		topband_gpio: topband_gpio { 
 			status = "okay";
@@ -51,8 +52,9 @@ obj-$(CONFIG_TOPBAND_GPIO_DRIVER) += topband_gpio/
 			};
 		};
 	};
+};
 ```
-5. Marge gpio.patch.
+5. Merge gpio.patch.
 
 ## API
 [API description](./gpio_api_usage.md)
