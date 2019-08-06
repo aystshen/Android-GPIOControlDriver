@@ -22,24 +22,31 @@ obj-$(CONFIG_TOPBAND_GPIO_DRIVER) += topband_gpio/
 			topband,gpios {
 				topband,gpio0 {
 					topband,gpio = <&gpio0 GPIO_B6 GPIO_ACTIVE_HIGH>;
+					topband,config = <2>; // 0: output(LOW) 1: output(HIGH) 2: input
 				};
 				topband,gpio1 {
 					topband,gpio = <&gpio0 GPIO_B5 GPIO_ACTIVE_HIGH>;
+					topband,config = <2>;
 				};
 				topband,gpio2 {
 					topband,gpio = <&gpio0 GPIO_B1 GPIO_ACTIVE_HIGH>;
+					topband,config = <2>;
 				};
 				topband,gpio3 {
 					topband,gpio = <&gpio0 GPIO_B0 GPIO_ACTIVE_HIGH>;
+					topband,config = <2>;
 				};
 				topband,gpio4 {
 					topband,gpio = <&gpio0 GPIO_D1 GPIO_ACTIVE_HIGH>;
+					topband,config = <2>;
 				};
 				topband,gpio5 {
 					topband,gpio = <&gpio1 GPIO_A3 GPIO_ACTIVE_HIGH>;
+					topband,config = <2>;
 				};
 				topband,gpio6 {
 					topband,gpio = <&gpio1 GPIO_B3 GPIO_ACTIVE_HIGH>;
+					topband,config = <2>;
 				};
 			};
 		};
@@ -55,15 +62,16 @@ obj-$(CONFIG_TOPBAND_GPIO_DRIVER) += topband_gpio/
 * ayst.shen@foxmail.com
 
 ## License
-	Copyright  (C)  2016 - 2017 Topband. Ltd.
+	Copyright 2019 Bob Shen.
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+	Licensed under the Apache License, Version 2.0 (the "License");
+	you may not use this file except in compliance with the License.
+	You may obtain a copy of the License at
 
-    This program is distributed in the hope that it will be a reference
-    to you, when you are integrating the android gpio into your system,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-    General Public License for more details.
+	http://www.apache.org/licenses/LICENSE-2.0
+
+	Unless required by applicable law or agreed to in writing, software
+	distributed under the License is distributed on an "AS IS" BASIS,
+	WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	See the License for the specific language governing permissions and
+	limitations under the License.

@@ -49,6 +49,10 @@
 
 #define TOPBAND_GPIO_IOC_MAXNR 6
 
+#define TOPBAND_GPIO_CONFIG_OUTPUT_LOW 0
+#define TOPBAND_GPIO_CONFIG_OUTPUT_HIGHT 1
+#define TOPBAND_GPIO_CONFIG_INPUT 2
+
 static int gKeyCode[TOPBAND_GPIO_MAX] = {
     KEY_GPIO_0,
     KEY_GPIO_1, 
@@ -61,11 +65,16 @@ static int gKeyCode[TOPBAND_GPIO_MAX] = {
     KEY_GPIO_8, 
     KEY_GPIO_9};
 
+struct topband_gpio {
+    int gpio;
+    int config;
+};
+
 struct topband_gpio_data {
     struct platform_device *platform_dev;
     struct miscdevice topband_gpio_device;
     struct input_dev *input_dev;
-    int gpios[TOPBAND_GPIO_MAX];
+    struct topband_gpio gpios[TOPBAND_GPIO_MAX];
     int irqs[TOPBAND_GPIO_MAX];
     int gpio_number;
 };
@@ -92,8 +101,8 @@ static void topband_gpio_free_io_port(struct topband_gpio_data *topband_gpio)
 {
     int i;
     for (i=0; i<topband_gpio->gpio_number; i++) {
-        if(gpio_is_valid(topband_gpio->gpios[i])) {
-            gpio_free(topband_gpio->gpios[i]);
+        if(gpio_is_valid(topband_gpio->gpios[i].gpio)) {
+            gpio_free(topband_gpio->gpios[i].gpio);
         }
     }
     return;
@@ -102,7 +111,7 @@ static void topband_gpio_free_io_port(struct topband_gpio_data *topband_gpio)
 static int topband_gpio_parse_dt(struct device *dev,
                               struct topband_gpio_data *topband_gpio)
 {
-    int index = 0;
+    int ret = 0, index = 0;
     struct device_node *np = dev->of_node;
     struct device_node *root  = of_get_child_by_name(np, "topband,gpios");
     struct device_node *child;
@@ -113,9 +122,16 @@ static int topband_gpio_parse_dt(struct device *dev,
             break;
         }
         
-        topband_gpio->gpios[index] = of_get_named_gpio(child, "topband,gpio", 0);
-        if(!gpio_is_valid(topband_gpio->gpios[index])) {
+        topband_gpio->gpios[index].gpio = of_get_named_gpio(child, "topband,gpio", 0);
+        if(!gpio_is_valid(topband_gpio->gpios[index].gpio)) {
             dev_err(dev, "No valid gpio[%d]", index);
+            return -1;
+        }
+
+        ret = of_property_read_u32(child, "topband,config", &topband_gpio->gpios[index].config);
+        if(ret < 0 || topband_gpio->gpios[index].config < TOPBAND_GPIO_CONFIG_OUTPUT_LOW 
+            || topband_gpio->gpios[index].config > TOPBAND_GPIO_CONFIG_INPUT) {
+            dev_err(dev, "No valid gpio[%d]'s config", index);
             return -1;
         }
 
@@ -132,17 +148,23 @@ static int topband_gpio_request_io_port(struct topband_gpio_data *topband_gpio)
     int ret = 0;
     int i;
     for (i=0; i<topband_gpio->gpio_number; i++) {
-        if(gpio_is_valid(topband_gpio->gpios[i])) {
-            ret = gpio_request(topband_gpio->gpios[i], "topband_gpio");
-
+        if(gpio_is_valid(topband_gpio->gpios[i].gpio)) {
+            ret = gpio_request(topband_gpio->gpios[i].gpio, "topband_gpio");
             if(ret < 0) {
                 dev_err(&topband_gpio->platform_dev->dev,
                         "Failed to request GPIO[%d]:%d, ERRNO:%d\n",
-                        i, (s32)topband_gpio->gpios[i], ret);
+                        i, (s32)topband_gpio->gpios[i].gpio, ret);
                 return -ENODEV;
             }
 
-            gpio_direction_input(topband_gpio->gpios[i]);
+            if (topband_gpio->gpios[i].config == TOPBAND_GPIO_CONFIG_INPUT) {
+                gpio_direction_input(topband_gpio->gpios[i].gpio);
+            } else if (topband_gpio->gpios[i].config == TOPBAND_GPIO_CONFIG_OUTPUT_LOW) {
+                gpio_direction_output(topband_gpio->gpios[i].gpio, 0);
+            } else if (topband_gpio->gpios[i].config == TOPBAND_GPIO_CONFIG_OUTPUT_HIGHT) {
+                gpio_direction_output(topband_gpio->gpios[i].gpio, 1);
+            } 
+            
             dev_info(&topband_gpio->platform_dev->dev, "Success request gpio[%d]\n", i);
         }
     }
@@ -221,7 +243,7 @@ static int topband_gpio_write(struct topband_gpio_data *topband_gpio, int gpio, 
     int ret = -1;
 
     if (gpio < topband_gpio->gpio_number) {
-       ret = topband_gpio_set_value(topband_gpio->gpios[gpio], value); 
+       ret = topband_gpio_set_value(topband_gpio->gpios[gpio].gpio, value); 
     }
 
     return ret;
@@ -231,7 +253,7 @@ static int topband_gpio_read(struct topband_gpio_data *topband_gpio, int gpio) {
     int ret = -1;
 
     if (gpio < topband_gpio->gpio_number) {
-       ret = topband_gpio_get_value(topband_gpio->gpios[gpio]); 
+       ret = topband_gpio_get_value(topband_gpio->gpios[gpio].gpio); 
     }
 
     return ret;
@@ -241,7 +263,7 @@ static int topband_gpio_direction(struct topband_gpio_data *topband_gpio, int gp
     int ret = -1;
 
     if (gpio < topband_gpio->gpio_number) {
-       ret = topband_gpio_set_direction(topband_gpio->gpios[gpio], value); 
+       ret = topband_gpio_set_direction(topband_gpio->gpios[gpio].gpio, value); 
     }
 
     return ret;
@@ -261,7 +283,7 @@ static irqreturn_t topband_gpio_irq_handle(int irq, void *dev_id)
     }
 
     if (gpio >= 0 && gpio < topband_gpio->gpio_number) {
-        value = topband_gpio_get_value(topband_gpio->gpios[gpio]);
+        value = topband_gpio_get_value(topband_gpio->gpios[gpio].gpio);
         if (value >= 0) {
            input_report_key(topband_gpio->input_dev, gKeyCode[gpio], !value);
            input_sync(topband_gpio->input_dev); 
@@ -276,9 +298,9 @@ static int topband_gpio_request_irq(struct topband_gpio_data *topband_gpio, int 
     int ret = 0;
 
     /* use irq */
-    if(gpio_is_valid(topband_gpio->gpios[gpio]) || topband_gpio->irqs[gpio] > 0) {
-        if(gpio_is_valid(topband_gpio->gpios[gpio]))
-            topband_gpio->irqs[gpio] = gpio_to_irq(topband_gpio->gpios[gpio]);
+    if(gpio_is_valid(topband_gpio->gpios[gpio].gpio) || topband_gpio->irqs[gpio] > 0) {
+        if(gpio_is_valid(topband_gpio->gpios[gpio].gpio))
+            topband_gpio->irqs[gpio] = gpio_to_irq(topband_gpio->gpios[gpio].gpio);
 
         dev_info(&topband_gpio->platform_dev->dev, "INT num %d, trigger type:%d\n",
                  topband_gpio->irqs[gpio], IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING);
