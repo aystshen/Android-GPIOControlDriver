@@ -1,0 +1,427 @@
+commit b7f25c89969aaa9cff38370edf15c52e98c79248
+Author: renke <renk@topband.com.cn>
+Date:   Tue Jun 15 08:43:05 2021 +0000
+
+    Android GPIO Control: step3: Add GPIO related JNI interface, Aidl interface, service, context and update system API in frameworks
+    
+    Change-Id: I16b73b88d1afcb3758a47f8224f8ccc025286d93
+
+diff --git a/Android.bp b/Android.bp
+old mode 100644
+new mode 100755
+index bf6c99d0cf29..5fdd99786174
+--- a/Android.bp
++++ b/Android.bp
+@@ -462,6 +462,14 @@ filegroup {
+     path: "core/java",
+ }
+ 
++filegroup {
++    name: "libgpio_aidl",
++    srcs: [
++        "core/java/android/os/IGpioService.aidl",
++    ],
++    path: "core/java",
++}
++
+ filegroup {
+     name: "libpowermanager_aidl",
+     srcs: [
+diff --git a/api/current.txt b/api/current.txt
+index e90918111ad8..eed48cc42286 100644
+--- a/api/current.txt
++++ b/api/current.txt
+@@ -10190,6 +10190,7 @@ package android.content {
+     field public static final String EUICC_SERVICE = "euicc";
+     field public static final String FILE_INTEGRITY_SERVICE = "file_integrity";
+     field public static final String FINGERPRINT_SERVICE = "fingerprint";
++    field public static final String GPIO_SERVICE = "gpio";
+     field public static final String HARDWARE_PROPERTIES_SERVICE = "hardware_properties";
+     field public static final String INPUT_METHOD_SERVICE = "input_method";
+     field public static final String INPUT_SERVICE = "input";
+diff --git a/core/java/android/app/SystemServiceRegistry.java b/core/java/android/app/SystemServiceRegistry.java
+old mode 100644
+new mode 100755
+index e599a5ce81ef..d180e8869c0d
+--- a/core/java/android/app/SystemServiceRegistry.java
++++ b/core/java/android/app/SystemServiceRegistry.java
+@@ -160,6 +160,7 @@ import android.os.StatsFrameworkInitializer;
+ import android.os.SystemConfigManager;
+ import android.os.SystemUpdateManager;
+ import android.os.SystemVibrator;
++import android.os.SystemGpio;
+ import android.os.UserHandle;
+ import android.os.UserManager;
+ import android.os.Vibrator;
+@@ -716,6 +717,12 @@ public final class SystemServiceRegistry {
+                 return new SystemVibrator(ctx);
+             }});
+ 
++        registerService(Context.GPIO_SERVICE, SystemGpio.class,
++			new CachedServiceFetcher<SystemGpio>() {
++            @Override
++            public SystemGpio createService(ContextImpl ctx) {
++				return new SystemGpio(ctx);
++            }});
+         registerService(Context.WALLPAPER_SERVICE, WallpaperManager.class,
+                 new CachedServiceFetcher<WallpaperManager>() {
+             @Override
+diff --git a/core/java/android/content/Context.java b/core/java/android/content/Context.java
+old mode 100644
+new mode 100755
+index 8472144a92cf..70e15fce1cb0
+--- a/core/java/android/content/Context.java
++++ b/core/java/android/content/Context.java
+@@ -3942,6 +3942,8 @@ public abstract class Context {
+      * @see android.os.Vibrator
+      */
+     public static final String VIBRATOR_SERVICE = "vibrator";
++    
++    public static final String GPIO_SERVICE = "gpio";
+ 
+     /**
+      * Use with {@link #getSystemService(String)} to retrieve a {@link
+diff --git a/core/java/android/os/IGpioService.aidl b/core/java/android/os/IGpioService.aidl
+new file mode 100755
+index 000000000000..d0a700bd327d
+--- /dev/null
++++ b/core/java/android/os/IGpioService.aidl
+@@ -0,0 +1,12 @@
++package android.os;
++ 
++/** {@hide} */
++interface IGpioService
++{
++	int gpioWrite(int gpio, int value);
++	int gpioRead(int gpio);
++	int gpioDirection(int gpio, int direction, int value);
++	int gpioRegKeyEvent(int gpio);
++	int gpioUnregKeyEvent(int gpio);
++	int gpioGetNumber();
++}
+\ No newline at end of file
+diff --git a/core/java/android/os/SystemGpio.java b/core/java/android/os/SystemGpio.java
+new file mode 100755
+index 000000000000..56a3cf50265e
+--- /dev/null
++++ b/core/java/android/os/SystemGpio.java
+@@ -0,0 +1,79 @@
++
++package android.os;
++
++import android.content.Context;
++import android.media.AudioAttributes;
++import android.util.Log;
++
++/**
++    Gpio implementation that controls the main system gpio.
++
++    @hide
++*/
++public class SystemGpio
++{
++    private static final String TAG = "gpio";
++
++    private final IGpioService mService;
++    public SystemGpio()
++    {
++        mService = IGpioService.Stub.asInterface(
++                       ServiceManager.getService("gpio"));
++    }
++
++    public SystemGpio(Context context)
++    {
++        mService = IGpioService.Stub.asInterface(
++                       ServiceManager.getService("gpio"));
++    }
++
++    public void gpioWrite(int gpio,int value)
++    {
++        try {
++            mService.gpioWrite(gpio, value);
++        } catch(Exception e) {}
++    }
++    
++    public int gpioRead(int gpio)
++    {
++        try {
++            return mService.gpioRead(gpio);
++        } catch(Exception e) {
++            return -1;
++        }
++    }
++    
++    public void gpioDirection(int gpio,int direction,int value)
++    {
++        try {
++            mService.gpioDirection(gpio, direction, value);
++        } catch(Exception e) {}
++    }
++    
++    public int gpioRegKeyEvent(int gpio)
++    {
++        try {
++            return mService.gpioRegKeyEvent(gpio);
++        } catch(Exception e) {
++            return -1;
++        }
++    }
++    
++    public int gpioUnregKeyEvent(int gpio)
++    {
++        try {
++            return mService.gpioUnregKeyEvent(gpio);
++        } catch(Exception e) {
++            return -1;
++        }
++    }
++    
++    public int gpioGetNumber()
++    {
++        try {
++            return mService.gpioGetNumber();
++        } catch(Exception e) {
++            return -1;
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/non-updatable-api/current.txt b/non-updatable-api/current.txt
+index f0d6871adf83..c87adda094d3 100644
+--- a/non-updatable-api/current.txt
++++ b/non-updatable-api/current.txt
+@@ -10190,6 +10190,7 @@ package android.content {
+     field public static final String EUICC_SERVICE = "euicc";
+     field public static final String FILE_INTEGRITY_SERVICE = "file_integrity";
+     field public static final String FINGERPRINT_SERVICE = "fingerprint";
++    field public static final String GPIO_SERVICE = "gpio";
+     field public static final String HARDWARE_PROPERTIES_SERVICE = "hardware_properties";
+     field public static final String INPUT_METHOD_SERVICE = "input_method";
+     field public static final String INPUT_SERVICE = "input";
+diff --git a/services/core/java/com/android/server/GpioService.java b/services/core/java/com/android/server/GpioService.java
+new file mode 100755
+index 000000000000..d572ebd8017f
+--- /dev/null
++++ b/services/core/java/com/android/server/GpioService.java
+@@ -0,0 +1,52 @@
++package com.android.server;
++import android.os.IGpioService;
++
++public class GpioService extends IGpioService.Stub
++{
++    private static final String TAG = "GpioService";
++
++    /* call native c function to access hardware */
++    public int gpioWrite(int gpio, int value) throws android.os.RemoteException
++    {
++        return native_gpioWrite(gpio, value);
++    }
++    
++    public int gpioRead(int gpio) throws android.os.RemoteException
++    {
++        return native_gpioRead(gpio);
++    }
++    
++    public int gpioDirection(int gpio, int direction, int value) throws android.os.RemoteException
++    {
++        return native_gpioDirection(gpio, direction, value);
++    }
++    
++    public int gpioRegKeyEvent(int gpio) throws android.os.RemoteException
++    {
++        return native_gpioRegKeyEvent(gpio);
++    }
++    
++    public int gpioUnregKeyEvent(int gpio) throws android.os.RemoteException
++    {
++        return native_gpioUnregKeyEvent(gpio);
++    }
++    
++    public int gpioGetNumber() throws android.os.RemoteException
++    {
++        return native_gpioGetNumber();
++    }
++    
++    public GpioService()
++    {
++        native_gpioOpen();
++    }
++
++    public static native int native_gpioOpen();
++    public static native void native_gpioClose();
++    public static native int native_gpioWrite(int gpio, int value);
++    public static native int native_gpioRead(int gpio);
++    public static native int native_gpioDirection(int gpio, int direction, int value);
++    public static native int native_gpioRegKeyEvent(int gpio);
++    public static native int native_gpioUnregKeyEvent(int gpio);
++    public static native int native_gpioGetNumber();
++}
+\ No newline at end of file
+diff --git a/services/core/jni/Android.bp b/services/core/jni/Android.bp
+old mode 100644
+new mode 100755
+index 8175c7fbf348..a5187d846ef6
+--- a/services/core/jni/Android.bp
++++ b/services/core/jni/Android.bp
+@@ -55,6 +55,7 @@ cc_library_static {
+         "com_android_server_UsbMidiDevice.cpp",
+         "com_android_server_UsbHostManager.cpp",
+         "com_android_server_VibratorService.cpp",
++	"com_android_server_GpioService.cpp",
+         "com_android_server_PersistentDataBlockService.cpp",
+         "com_android_server_am_CachedAppOptimizer.cpp",
+         "com_android_server_am_LowMemDetector.cpp",
+diff --git a/services/core/jni/com_android_server_GpioService.cpp b/services/core/jni/com_android_server_GpioService.cpp
+new file mode 100755
+index 000000000000..b1fcd2088329
+--- /dev/null
++++ b/services/core/jni/com_android_server_GpioService.cpp
+@@ -0,0 +1,104 @@
++#include "jni.h"
++#include <nativehelper/JNIHelp.h>
++#include "android_runtime/AndroidRuntime.h"
++#include <utils/misc.h>
++#include <utils/Log.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <fcntl.h>
++#include <sys/ioctl.h>
++#include <hardware/gpio_hal.h>
++
++namespace android
++{
++
++static struct gpio_device_t* gpioDevice;
++
++jint gpioOpen(JNIEnv *env, jobject cls)
++{
++    jint err;
++    hw_module_t* module;
++    hw_device_t* device;
++    
++    ALOGI("native gpioOpen ...");
++
++    // hw_get_module finds the library by "gpio" (this is the id of hal)
++    err = hw_get_module("gpio", (hw_module_t const**)&module);
++    if(err == 0) {
++        // Get device : module->methods->open
++        err = module->methods->open(module, NULL, &device);
++        if(err == 0) {
++            // Call gpio_open
++            gpioDevice = (gpio_device_t *)device;
++            return gpioDevice->gpio_open(gpioDevice);
++        } else {
++            return -1;
++        }
++    }
++
++    return -1;
++}
++
++void gpioClose(JNIEnv *env, jobject cls)
++{
++    ALOGI("native gpioClose ...");
++}
++
++jint gpioWrite(JNIEnv *env, jobject cls, jint gpio, jint value)
++{
++    ALOGI("native gpioWrite gpio=%d, value=%d", gpio, value);
++    return gpioDevice->gpio_write(gpioDevice, gpio, value);
++}
++
++jint gpioRead(JNIEnv *env, jobject cls, jint gpio)
++{
++    ALOGI("native gpioRead gpio=%d", gpio);
++    return gpioDevice->gpio_read(gpioDevice, gpio);
++}
++
++jint gpioDirection(JNIEnv *env, jobject cls, jint gpio, jint direction, jint value)
++{
++    ALOGI("native gpioRead gpio=%d", gpio);
++    return gpioDevice->gpio_direction(gpioDevice, gpio, direction, value);
++}
++
++jint gpioRegKeyEvent(JNIEnv *env, jobject cls, jint gpio)
++{
++    ALOGI("native gpioRegKeyEvent gpio=%d", gpio);
++    return gpioDevice->gpio_reg_key_event(gpioDevice, gpio);
++}
++
++jint gpioUnregKeyEvent(JNIEnv *env, jobject cls, jint gpio)
++{
++    ALOGI("native gpioUnregKeyEvent gpio=%d", gpio);
++    return gpioDevice->gpio_unreg_key_event(gpioDevice, gpio);
++}
++
++jint gpioGetNumber(JNIEnv *env, jobject cls)
++{
++    ALOGI("native gpioGetNumber");
++    return gpioDevice->gpio_get_number(gpioDevice);
++}
++
++// Register native methods
++static const JNINativeMethod methods[] = {
++    {"native_gpioOpen", "()I", (void *)gpioOpen},
++    {"native_gpioClose", "()V", (void *)gpioClose},
++    {"native_gpioWrite", "(II)I", (void *)gpioWrite},
++    {"native_gpioRead", "(I)I", (void *)gpioRead},
++    {"native_gpioDirection", "(III)I", (void *)gpioDirection},
++    {"native_gpioRegKeyEvent", "(I)I", (void *)gpioRegKeyEvent},
++    {"native_gpioUnregKeyEvent", "(I)I", (void *)gpioUnregKeyEvent},
++    {"native_gpioGetNumber", "()I", (void *)gpioGetNumber},
++};
++    
++int register_android_server_GpioService(JNIEnv *env)
++{
++    // The Java method corresponding to the local method GpioService
++    return jniRegisterNativeMethods(env, "com/android/server/GpioService",
++                                    methods, NELEM(methods));
++}
++
++}
+\ No newline at end of file
+diff --git a/services/core/jni/onload.cpp b/services/core/jni/onload.cpp
+index b5c7f13c7624..f0c58d2425f6 100755
+--- a/services/core/jni/onload.cpp
++++ b/services/core/jni/onload.cpp
+@@ -39,6 +39,7 @@ int register_android_server_UsbMidiDevice(JNIEnv* env);
+ int register_android_server_UsbHostManager(JNIEnv* env);
+ int register_android_server_vr_VrManagerService(JNIEnv* env);
+ int register_android_server_VibratorService(JNIEnv* env);
++int register_android_server_GpioService(JNIEnv* env);
+ int register_android_server_location_GnssLocationProvider(JNIEnv* env);
+ int register_android_server_connectivity_Vpn(JNIEnv* env);
+ int register_android_server_TestNetworkService(JNIEnv* env);
+@@ -94,6 +95,7 @@ extern "C" jint JNI_OnLoad(JavaVM* vm, void* /* reserved */)
+     register_android_server_UsbHostManager(env);
+     register_android_server_vr_VrManagerService(env);
+     register_android_server_VibratorService(env);
++    register_android_server_GpioService(env);
+     register_android_server_SystemServer(env);
+     register_android_server_location_GnssLocationProvider(env);
+     register_android_server_connectivity_Vpn(env);
+diff --git a/services/java/com/android/server/SystemServer.java b/services/java/com/android/server/SystemServer.java
+index 72ebc90670dd..0c1b91c16c20 100755
+--- a/services/java/com/android/server/SystemServer.java
++++ b/services/java/com/android/server/SystemServer.java
+@@ -1019,6 +1019,7 @@ public final class SystemServer {
+ 
+         final Context context = mSystemContext;
+         VibratorService vibrator = null;
++		GpioService gpio = null;
+         DynamicSystemService dynamicSystem = null;
+         IStorageManager storageManager = null;
+         NetworkManagementService networkManagement = null;
+@@ -1137,6 +1138,10 @@ public final class SystemServer {
+             ServiceManager.addService("vibrator", vibrator);
+             t.traceEnd();
+ 
++			t.traceBegin("StartGpioService");
++            gpio = new GpioService();
++            ServiceManager.addService("gpio", gpio);
++            t.traceEnd();
+             t.traceBegin("StartDynamicSystemService");
+             dynamicSystem = new DynamicSystemService(context);
+             ServiceManager.addService("dynamic_system", dynamicSystem);

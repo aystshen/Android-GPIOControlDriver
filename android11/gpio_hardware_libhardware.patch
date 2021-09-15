@@ -1,0 +1,298 @@
+commit c3d5a79f19d7ea8bc0736af92e732a2e869fe202
+Author: renke <renk@topband.com.cn>
+Date:   Tue Jun 15 06:13:20 2021 +0000
+
+    Android GPIO Control: step2: add hal driver for GPIO
+    
+    Change-Id: Ife61db326991cc56a1acb9c4514b0bd5441f20a0
+
+diff --git a/include/hardware/gpio_hal.h b/include/hardware/gpio_hal.h
+new file mode 100755
+index 00000000..33f38c5c
+--- /dev/null
++++ b/include/hardware/gpio_hal.h
+@@ -0,0 +1,24 @@
++#ifndef ANDROID_GPIO_INTERFACE_H
++#define ANDROID_GPIO_INTERFACE_H
++
++#include <stdint.h>
++#include <sys/cdefs.h>
++#include <sys/types.h>
++#include <hardware/hardware.h>
++
++__BEGIN_DECLS
++struct gpio_device_t {
++    struct hw_device_t common;
++
++    int (*gpio_open)(struct gpio_device_t* dev);
++    int (*gpio_write)(struct gpio_device_t* dev, int gpio, int value);
++    int (*gpio_read)(struct gpio_device_t* dev, int gpio);
++    int (*gpio_direction)(struct gpio_device_t* dev, int gpio, int direction, int value);
++    int (*gpio_reg_key_event)(struct gpio_device_t* dev, int gpio);
++    int (*gpio_unreg_key_event)(struct gpio_device_t* dev, int gpio);
++    int (*gpio_get_number)(struct gpio_device_t* dev);
++};
++
++__END_DECLS
++
++#endif  // ANDROID_GPIO_INTERFACE_H
+\ No newline at end of file
+diff --git a/modules/Android.mk b/modules/Android.mk
+old mode 100644
+new mode 100755
+index a430a650..69b14a0d
+--- a/modules/Android.mk
++++ b/modules/Android.mk
+@@ -2,5 +2,6 @@ hardware_modules := \
+     camera \
+     gralloc \
+     sensors \
++    gpio \
+     hw_output
+ include $(call all-named-subdir-makefiles,$(hardware_modules))
+diff --git a/modules/gpio/Android.mk b/modules/gpio/Android.mk
+new file mode 100755
+index 00000000..ca12e502
+--- /dev/null
++++ b/modules/gpio/Android.mk
+@@ -0,0 +1,30 @@
++# Copyright (C) 2012 The Android Open Source Project
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++LOCAL_PATH := $(call my-dir)
++
++
++
++include $(CLEAR_VARS)
++LOCAL_CFLAGS := -Wno-unused-parameter -Wno-incompatible-pointer-types
++LOCAL_MODULE := gpio.default
++
++LOCAL_MODULE_RELATIVE_PATH := hw
++LOCAL_PROPRIETARY_MODULE := true
++LOCAL_SRC_FILES := gpio_hal.c
++LOCAL_HEADER_LIBRARIES := libhardware_headers
++LOCAL_SHARED_LIBRARIES := liblog libcutils libutils
++LOCAL_MODULE_TAGS := optional
++
++include $(BUILD_SHARED_LIBRARY)
+diff --git a/modules/gpio/gpio_hal.c b/modules/gpio/gpio_hal.c
+new file mode 100755
+index 00000000..1f942e9c
+--- /dev/null
++++ b/modules/gpio/gpio_hal.c
+@@ -0,0 +1,203 @@
++#include <hardware/hardware.h>
++#include <cutils/log.h>
++#include <stdio.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <errno.h>
++#include <hardware/gpio_hal.h>
++#include <stdlib.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <sys/ioctl.h>
++#include <utils/Log.h>
++
++#define DEVICE "/dev/topband_gpio"
++
++#define GPIO_IOC_MAGIC  'f'
++#define GPIO_IOC_SET_VALUE  _IOW(GPIO_IOC_MAGIC, 1, int)
++#define GPIO_IOC_GET_VALUE  _IOR(GPIO_IOC_MAGIC, 2, int)
++#define GPIO_IOC_SET_DIRECTION _IOW(GPIO_IOC_MAGIC, 3, int)
++#define GPIO_IOC_REG_KEY_EVENT _IOW(GPIO_IOC_MAGIC, 4, int)
++#define GPIO_IOC_UNREG_KEY_EVENT _IOW(GPIO_IOC_MAGIC, 5, int)
++#define GPIO_IOC_GET_NUMBER _IOW(GPIO_IOC_MAGIC, 6, int)
++
++#define TOPBAND_GPIO_IOC_MAXNR 6
++
++#define GPIO_DIRECTION_MASK 0x01
++#define GPIO_VALUE_MASK 0x02
++
++static int fd;
++
++static int gpio_close(struct hw_device_t* device)
++{
++    close(fd);
++    return 0;
++}
++
++static int gpio_open(struct gpio_device_t* dev)
++{
++    fd = open(DEVICE, O_RDWR);
++    ALOGI("gpio_open : %d", fd);
++
++    if(fd >= 0) {
++        return 0;
++    } else {
++        return -1;
++    }
++}
++
++static int gpio_write(struct gpio_device_t* dev, int gpio, int value)
++{
++    int ret = 0;
++    int data = 0;
++    
++    if(fd < 0) {
++        ret = gpio_open(dev);
++        if (ret < 0) {
++            return -1;
++        }
++    }
++
++    data = ((gpio & 0x0f) << 4) | (value & 0x0f);
++    ret = ioctl(fd, GPIO_IOC_SET_VALUE, &data);
++    
++    ALOGI("gpio_write: gpio=%d, value=%d, data=%d, ret=%d", gpio, value, data, ret);
++    
++    return ret;
++}
++
++static int gpio_read(struct gpio_device_t* dev, int gpio)
++{
++    int ret = 0;
++    int data = 0;
++    
++    if(fd < 0) {
++        ret = gpio_open(dev);
++        if (ret < 0) {
++            return -1;
++        }
++    }
++
++    data = (gpio & 0x0f) << 4;
++    ret = ioctl(fd, GPIO_IOC_GET_VALUE, &data);
++    
++    ALOGI("gpio_read: gpio=%d, data=%d, ret=%d", gpio, data, ret);
++    if (ret >= 0) {
++        ret = data;
++    }
++    
++    return ret;
++}
++
++static int gpio_direction(struct gpio_device_t* dev, int gpio, int direction, int value)
++{
++    int ret = 0;
++    int data = 0;
++    
++    if(fd < 0) {
++        ret = gpio_open(dev);
++        if (ret < 0) {
++            return -1;
++        }
++    }
++
++    data = ((gpio & 0x0f) << 4) | (direction > 0 ? GPIO_DIRECTION_MASK : 0x00) | (value > 0 ? GPIO_VALUE_MASK : 0x00);
++    ret = ioctl(fd, GPIO_IOC_SET_DIRECTION, &data);
++    
++    ALOGI("gpio_direction: gpio=%d, direction=%d, value=%d, data=%d, ret=%d", gpio, direction, value, data, ret);
++    
++    return ret;
++}
++
++static int gpio_reg_key_event(struct gpio_device_t* dev, int gpio)
++{
++    int ret = 0;
++    int data = 0;
++    
++    if(fd < 0) {
++        ret = gpio_open(dev);
++        if (ret < 0) {
++            return -1;
++        }
++    }
++
++    data = (gpio & 0x0f) << 4;
++    ret = ioctl(fd, GPIO_IOC_REG_KEY_EVENT, &data);
++    
++    ALOGI("gpio_reg_key_event: gpio=%d, data=%d, ret=%d", gpio, data, ret);
++    
++    return ret;
++}
++
++static int gpio_unreg_key_event(struct gpio_device_t* dev, int gpio)
++{
++    int ret = 0;
++    int data = 0;
++    
++    if(fd < 0) {
++        ret = gpio_open(dev);
++        if (ret < 0) {
++            return -1;
++        }
++    }
++
++    data = (gpio & 0x0f) << 4;
++    ret = ioctl(fd, GPIO_IOC_UNREG_KEY_EVENT, &data);
++    
++    ALOGI("gpio_unreg_key_event: gpio=%d, data=%d, ret=%d", gpio, data, ret);
++    
++    return ret;
++}
++
++static int gpio_get_number(struct gpio_device_t* dev)
++{
++    int ret = 0;
++    int data = 0;
++    
++    if(fd < 0) {
++        ret = gpio_open(dev);
++        if (ret < 0) {
++            return -1;
++        }
++    }
++
++    ret = ioctl(fd, GPIO_IOC_GET_NUMBER, &data);
++    
++    ALOGI("gpio_get_number: data=%d, ret=%d", data, ret);
++    if (ret >= 0) {
++        ret = data;
++    }
++    
++    return ret;
++}
++
++static struct gpio_device_t gpio_dev = {
++    .common = {
++        .tag   = HARDWARE_DEVICE_TAG,
++        .close = gpio_close,
++    },
++    .gpio_open  = gpio_open,
++    .gpio_write  = gpio_write,
++    .gpio_read  = gpio_read,
++    .gpio_direction  = gpio_direction,
++    .gpio_reg_key_event  = gpio_reg_key_event,
++    .gpio_unreg_key_event  = gpio_unreg_key_event,
++    .gpio_get_number  = gpio_get_number,
++};
++
++static int gpio_device_open(const struct hw_module_t* module, const char* id,
++                           struct hw_device_t** device)
++{
++    *device = &gpio_dev;
++    return 0;
++}
++
++static struct hw_module_methods_t gpio_module_methods = {
++    .open = gpio_device_open,
++};
++
++struct hw_module_t HAL_MODULE_INFO_SYM = {
++    .tag = HARDWARE_MODULE_TAG,
++    .id = "gpio",
++    .methods = &gpio_module_methods,
++};
+\ No newline at end of file
