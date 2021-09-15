@@ -1,11 +1,3 @@
-commit b7f25c89969aaa9cff38370edf15c52e98c79248
-Author: renke <renk@topband.com.cn>
-Date:   Tue Jun 15 08:43:05 2021 +0000
-
-    Android GPIO Control: step3: Add GPIO related JNI interface, Aidl interface, service, context and update system API in frameworks
-    
-    Change-Id: I16b73b88d1afcb3758a47f8224f8ccc025286d93
-
 diff --git a/Android.bp b/Android.bp
 old mode 100644
 new mode 100755

@@ -1,11 +1,3 @@
-commit d87785cc7e9d56aa0615731c3e495ab170e6e11e
-Author: renke <renk@topband.com.cn>
-Date:   Tue Jun 15 03:20:20 2021 +0000
-
-    【Android GPIO Control】step1- kernel add gpio driver
-    
-    Change-Id: Ib770488602ba7da06aa977b9918facbd7e787f4a
-
 diff --git a/drivers/misc/Makefile b/drivers/misc/Makefile
 old mode 100644
 new mode 100755
